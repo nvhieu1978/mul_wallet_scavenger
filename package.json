@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "@emurgo/cardano-serialization-lib-browser": "^15.0.1",
+    "@emurgo/cardano-serialization-lib-nodejs": "^15.0.1",
+    "@meshsdk/core": "^1.9.0-beta.86",
+    "axios": "^1.13.1",
+    "bip39": "^3.1.0",
+    "blakejs": "^1.2.1",
+    "cbor": "^10.0.11"
+  }
+}
