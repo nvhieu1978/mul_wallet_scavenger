@@ -6,6 +6,10 @@ import { Bip32PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 const blockfrostProvider = new BlockfrostProvider(process.env.BLOCKFROST_API_KEY as string);
 const destination = process.env.DESTINATION_WALLET_ADDRESS as string
 
+// --- THÊM HÀM DELAY NÀY ---
+// Hàm này tạo ra một Promise sẽ hoàn thành sau 'ms' mili-giây
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// --------------------------
 
 const HARDENED = 0x80000000;
 const mnemonic = process.env.MNEMONIC!;
@@ -70,6 +74,12 @@ for(let index = Number(process.env.ACCOUNT_INDEX_START); index < (Number(process
     }catch(error) {
        console.log(error)
     }
+// --- THÊM VÀO: DELAY 2 GIÂY ---
+    // Thêm một log để biết nó đang tạm dừng
+    console.log(`Đã xử lý tài khoản ${index}. Tạm dừng 2 giây...`);
+    // Chờ 2000 mili-giây (tức là 2 giây) trước khi bắt đầu vòng lặp tiếp theo
+    await delay(2000);
+    // -----------------------------
 }
 
 
