@@ -4,7 +4,10 @@ import fs from 'fs';
 import { Bip32PrivateKey } from '@emurgo/cardano-serialization-lib-nodejs';
 
 const blockfrostProvider = new BlockfrostProvider(process.env.BLOCKFROST_API_KEY as string);
-
+// --- THÊM HÀM DELAY ---
+// Hàm này tạo ra một Promise sẽ hoàn thành sau 'ms' mili-giây
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// --------------------------
 let json: any = {};
 
 const tandc  = await axios.get(`${process.env.BASE_URL}/TandC`);
@@ -77,6 +80,12 @@ for(let index = Number(process.env.ACCOUNT_INDEX_START); index < (Number(process
 
         challenge_queue: []
   };
+    // --- THÊM VÀO: DELAY 2 GIÂY ---
+    // Thêm một log để biết nó đang tạm dừng
+    console.log(`Đã xử lý tài khoản ${index}. Tạm dừng 2 giây...`);
+    // Chờ 2000 mili-giây (tức là 2 giây) trước khi bắt đầu vòng lặp tiếp theo
+    await delay(2000);
+    // -----------------------------
 }
 
 
