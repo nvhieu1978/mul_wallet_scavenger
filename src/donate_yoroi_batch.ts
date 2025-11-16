@@ -25,9 +25,9 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
  * Mặc định là '0' (external/payment) nếu không cung cấp. Dùng '1' cho (internal/change).
  *
  * Cách chạy:
- * bun run donate_yoroi_batch.ts 0
+ * bun run src/donate_yoroi_batch.ts 0
  * hoặc
- * bun run donate_yoroi_batch.ts 1
+ * bun run src/donate_yoroi_batch.ts 1
  */
 const roleArg = process.argv[2];
 const roleToScan = (roleArg === '1') ? 1 : 0;
