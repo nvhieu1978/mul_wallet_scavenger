@@ -101,6 +101,17 @@ const ADDRESS_PER_ROLE = 40;
 
 const roleArg = process.argv[2];
 const rolesToProcess = roleArg === "1" ? [1] : roleArg === "2" ? [0, 1] : [0];
+/**
+ * [MỚI] Lấy 'role' từ đối số dòng lệnh (command-line argument)
+ * Mặc định là '0' (external/payment) nếu không cung cấp. Dùng '1' cho (internal/change).
+ *
+ * Cách chạy:
+ * bun run src/donate_yoroi_batch.ts 0
+ * hoặc
+ * bun run src/donate_yoroi_batch.ts 1
+ * hoặc
+ * bun run src/donate_yoroi_batch.ts 2
+ */
 
 const message = `Assign accumulated Scavenger rights to: ${destination}`;
 
