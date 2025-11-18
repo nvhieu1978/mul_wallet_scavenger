@@ -1,148 +1,207 @@
-import axios from 'axios';
+/*****************************************************************************************
+ *  Donate Script — CIP-8 Signer (Ed25519 / COSESign1)
+ *  ---------------------------------------------------
+ *  ✔ Derive key bằng CSL (Bip32PrivateKey)
+ *  ✔ Ký COSESign1 chuẩn CIP-8 giống Lucid / Nami / Eternl
+ *  ✔ Quét account / role / addressIndex
+ *  ✔ Gửi API donate
+ *****************************************************************************************/
+
+import axios from "axios";
+import * as CSL from "@emurgo/cardano-serialization-lib-nodejs";
 import { mnemonicToEntropy } from "@meshsdk/core";
-// import fs from 'fs'; // Không cần fs nữa
+import nacl from "tweetnacl";
+import * as cbor from "cbor";
 
-// [GIỮ NGUYÊN] Dùng 'import CSL = require(...)'
-import CSL = require('@emurgo/cardano-serialization-lib-nodejs');
-
-// --- CẤU HÌNH ---
-const destination = process.env.DESTINATION_WALLET_ADDRESS as string;
+// ------------------------------------------------------------
+// Helpers
+// ------------------------------------------------------------
 const HARDENED = 0x80000000;
-const mnemonic = process.env.MNEMONIC!; 
+const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+function hexToBytes(hex: string): Uint8Array {
+    const h = hex.length % 2 ? "0" + hex : hex;
+    const out = new Uint8Array(h.length / 2);
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(h.substr(i * 2, 2), 16);
+    return out;
+}
+function bytesToHex(b: Uint8Array | Buffer): string {
+    return Buffer.from(b).toString("hex");
+}
+function base64UrlEncode(bytes: Uint8Array): string {
+    return Buffer.from(bytes)
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+}
+
+// ------------------------------------------------------------
+// CIP-8 COSESign1 Signer
+// ------------------------------------------------------------
+export function signCip8(message: string, addressBech32: string, paymentKey: CSL.Bip32PrivateKey) {
+    const payload = Buffer.from(message, "utf8");
+
+    // 1) Protected header: { 1: -8 }  (alg = EdDSA)
+    const protectedMap = new Map<number, number>();
+    protectedMap.set(1, -8);
+    const protectedBytes = cbor.encode(protectedMap);
+
+    // 2) Unprotected header
+    const addressBytes = CSL.Address.from_bech32(addressBech32).to_bytes();
+    const pubKeyBytes = paymentKey.to_public().to_raw_key().as_bytes();
+
+    const unprotected = {
+        address: Buffer.from(addressBytes),
+        key_id: Buffer.from(pubKeyBytes),
+    };
+
+    // 3) Sig_structure
+    const sigStructure = [
+        "Signature1",
+        Buffer.from(protectedBytes),    // body_protected
+        Buffer.from([]),                // external AAD
+        Buffer.from(payload),           // payload
+    ];
+    const sigStructureBytes = cbor.encode(sigStructure);
+
+    // 4) Sign Ed25519
+    const rawPriv = paymentKey.to_raw_key();
+    const signatureBytes = rawPriv.sign(sigStructureBytes).to_bytes();
+
+    // 5) COSE_Sign1 array
+    const coseArray = [
+        Buffer.from(protectedBytes),
+        unprotected,
+        Buffer.from(payload),
+        Buffer.from(signatureBytes),
+    ];
+
+    const coseBinary = cbor.encode(coseArray);
+
+    return {
+        hex: bytesToHex(coseBinary),
+        base64url: base64UrlEncode(coseBinary),
+    };
+}
+
+// ------------------------------------------------------------
+// MAIN
+// ------------------------------------------------------------
+
+const destination = process.env.DESTINATION_WALLET_ADDRESS!;
+const mnemonic = process.env.MNEMONIC!;
 const entropyHex = mnemonicToEntropy(mnemonic);
 const entropy = Buffer.from(entropyHex, "hex");
-const pwd = new Uint8Array(); 
+const pwd = new Uint8Array();
 
-const ADDRESS_COUNT_TO_GENERATE = 40; 
-// -----------------
+const START = Number(process.env.ACCOUNT_INDEX_START ?? 0);
+const COUNT = Number(process.env.AMOUNT_ACCOUNT ?? 1);
+const ADDRESS_PER_ROLE = 40;
 
-// --- Hàm Delay (giữ nguyên) ---
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-// -----------------------------
-
-/**
- * [THAY ĐỔI] Lấy 'role' từ đối số và quyết định mảng 'rolesToProcess'
- * 0 = External/Payment (Mặc định)
- * 1 = Internal/Change
- * 2 = Cả 0 và 1
- */
 const roleArg = process.argv[2];
-let rolesToProcess: number[];
-let startMessage: string;
+const rolesToProcess = roleArg === "1" ? [1] : roleArg === "2" ? [0, 1] : [0];
 
-if (roleArg === '1') {
-    rolesToProcess = [1];
-    startMessage = "--- 🚀 BẮT ĐẦU SCRIPT VỚI ROLE: 1 (Internal/Change) ---";
-} else if (roleArg === '2') {
-    rolesToProcess = [0, 1]; // [MỚI] Chạy cả hai
-    startMessage = "--- 🚀 BẮT ĐẦU SCRIPT VỚI ROLE: 0 VÀ 1 (Cả External và Internal) ---";
-} else {
-    rolesToProcess = [0]; // Mặc định là 0
-    startMessage = "--- 🚀 BẮT ĐẦU SCRIPT VỚI ROLE: 0 (External/Payment) ---";
-}
-console.log(startMessage);
-
-
-// [GIỮ NGUYÊN] Chuẩn bị message (chỉ 1 lần)
 const message = `Assign accumulated Scavenger rights to: ${destination}`;
-const messageBytes = Buffer.from(message, "utf-8"); // Chuyển message sang bytes
 
+console.log("=====================================================");
+console.log("🚀 CIP-8 Donate Script Started");
+console.log("Roles:", rolesToProcess);
+console.log("=====================================================");
 
-/**
- * [GIỮ NGUYÊN] Hàm chính
- */
-async function processDonations() {
-    
-    // [GIỮ NGUYÊN] Vòng lặp Account
-    for(let index = Number(process.env.ACCOUNT_INDEX_START); index < (Number(process.env.AMOUNT_ACCOUNT)+ Number(process.env.ACCOUNT_INDEX_START)); index ++) {
-        
-        console.log(`\n======================================================`);
-        console.log(`Đang xử lý Account ${index}`);
-        console.log(`======================================================`);
+async function main() {
+    for (let accIndex = START; accIndex < START + COUNT; accIndex++) {
+        console.log(`\n================ ACCOUNT ${accIndex} ================`);
 
         try {
-            // [GIỮ NGUYÊN] Kiểm tra CSL
-            if (!CSL || !CSL.Credential) {
-                console.error("❌ LỖI: Thư viện CSL không được nạp đúng cách! 'CSL.Credential' là undefined.");
-                break; // Dừng vòng lặp account
-            }
-
+            // Derive account key
             const rootKey = CSL.Bip32PrivateKey.from_bip39_entropy(entropy, pwd);
+
             const accountKey = rootKey
                 .derive(1852 | HARDENED)
                 .derive(1815 | HARDENED)
-                .derive(index | HARDENED); // 'index' là Account Index
+                .derive(accIndex | HARDENED);
 
-            // 1. Lấy Stake Credential CỐ ĐỊNH cho account này
-            const stakeKey = accountKey.derive(2).derive(0); // Role 2 = Staking
-            const stakeCred = CSL.Credential.from_keyhash(stakeKey.to_public().to_raw_key().hash());
-            console.log(`   🔑 Stake Key cho Account ${index} đã được xác định.`);
+            // Stake key
+            const stakeKey = accountKey.derive(2).derive(0);
+            const StakeCredClass = CSL.Credential || CSL.StakeCredential;
+            const stakeCred = StakeCredClass.from_keyhash(
+                stakeKey.to_public().to_raw_key().hash()
+            );
 
+            for (const role of rolesToProcess) {
+                console.log(`\n---- Role ${role} ----`);
 
-            // 2. [VÒNG LẶP MỚI] Lặp qua các role cần xử lý (ví dụ: [0, 1])
-            for (const roleToScan of rolesToProcess) {
-                
-                console.log(`\n   --- Bắt đầu quét Role ${roleToScan} ( ${roleToScan === 0 ? 'External' : 'Internal'} ) ---`);
+                for (let addrIndex = 0; addrIndex < ADDRESS_PER_ROLE; addrIndex++) {
+                    const paymentKey = accountKey.derive(role).derive(addrIndex);
+                    const paymentPub = paymentKey.to_public();
 
-                // 3. Vòng lặp TẠO địa chỉ
-                for (let addressIndex = 0; addressIndex < ADDRESS_COUNT_TO_GENERATE; addressIndex++) {
-                    
-                    console.log(`\n      --- Đang xử lý (Index ${addressIndex}) ---`);
-
-                    // 4. Derive Payment Key
-                    const paymentKey = accountKey.derive(roleToScan).derive(addressIndex);
-                    
-                    // 5. Tạo Payment Credential
-                    const paymentCred = CSL.Credential.from_keyhash(paymentKey.to_public().to_raw_key().hash());
-
-                    // 6. TẠO ĐỊA CHỈ (Ghép Payment Key và Stake Key)
-                    const baseAddress = CSL.BaseAddress.new(
-                        CSL.NetworkInfo.mainnet().network_id(),
-                        paymentCred, // Key thanh toán thay đổi
-                        stakeCred      // Key ủy quyền cố định
+                    const paymentCred = StakeCredClass.from_keyhash(
+                        paymentPub.to_raw_key().hash()
                     );
-                    const targetAddress = baseAddress.to_address().to_bech32();
-                    console.log(`      📬 Đã tạo địa chỉ: ${targetAddress}`);
 
-                    // 7. KÝ
-                    const rawPrivateKey = paymentKey.to_raw_key();
-                    const cslSignature = rawPrivateKey.sign(messageBytes);
-                    const signatureHex = cslSignature.to_hex();
-                    
-                    // 8. Gửi (Submit)
-                    const donateUrl = `${process.env.BASE_URL}/donate_to/${destination}/${targetAddress}/${signatureHex}`;
-                    console.log(`      ...Đang gửi tới API: ${donateUrl.substring(0, 80)}...`);
+                    const baseAddr = CSL.BaseAddress.new(
+                        CSL.NetworkInfo.mainnet().network_id(),
+                        paymentCred,
+                        stakeCred
+                    );
+                    const address = baseAddr.to_address().to_bech32();
+
+                    console.log(`[${addrIndex}] ${address}`);
+
+                    // ----------- CIP-8 SIGN -----------
+                    const signed = signCip8(message, address, paymentKey);
+
+                    // ----------- SEND TO API ----------
+                    const donateUrl = `${process.env.BASE_URL}/donate_to/${destination}/${address}/${signed.hex}`;
+                    console.log("API:", donateUrl);
 
                     try {
-                        const {data} = await axios.post(
-                                donateUrl,
-                                {}, 
-                                { headers: { 'Content-Type': 'application/json' } }
-                            );
-                        console.log("      ✅ API Response:", data);
-                    } catch(error) {
-                       if (axios.isAxiosError(error)) {
-                           console.error("      ❌ Lỗi Axios:", error.response?.data || error.message);
-                       } else {
-                           console.error("      ❌ Lỗi:", error.message);
-                       }
-                    }
-                    
-                    console.log(`      ...Tạm dừng 1 giây...`);
-                    await delay(1000); 
-                    
-                } // --- Kết thúc vòng lặp 'addressIndex' ---
+                        const { data } = await axios.post(donateUrl, {}, {
+                            headers: { "Content-Type": "application/json" }
+                        });
+                        console.log("   ✅ OK:", data);
+            			 } catch (err: any) {
+            			    console.log("❌ API ERROR OCCURRED");
             
-            } // --- Kết thúc vòng lặp 'roleToScan' ---
+            			    if (err.response) {
+            				console.log("👉 Status:", err.response.status);
+            				console.log("👉 StatusText:", err.response.statusText);
+            
+            				console.log("👉 FULL ERROR DATA (server trả về):");
+            				if (typeof err.response.data === "object") {
+            				    // Nếu server trả về object JSON
+            				    console.log(JSON.stringify(err.response.data, null, 2));
+            				} else {
+            				    // Nếu server trả về string
+            				    try {
+            					console.log(JSON.stringify(JSON.parse(err.response.data), null, 2));
+            				    } catch {
+            					console.log(err.response.data);
+            				    }
+            				}
+            
+            
+            			    } else if (err.request) {
+            				console.log("❌ Không nhận được response từ server");
+            				console.log(err.request);
+            			    } else {
+            				console.log("❌ Lỗi khi tạo request:", err.message);
+            			    }
+            
+            			}
 
-        } catch (deriveError) {
-            console.error(`   ❌ Lỗi nghiêm trọng khi derive key cho Account ${index}:`, deriveError.message);
-        }
 
-    } // --- Kết thúc vòng lặp 'index' (account) ---
-    
-    console.log("\n🎉🎉🎉 Đã hoàn tất xử lý tất cả địa chỉ được tạo.");
+
+					await delay(1000);
+					}
+				    }
+				} catch (e: any) {
+				    console.log("❌ Lỗi account:", e.message);
+				}
+			    }
+
+    console.log("\n🎉 DONE.");
 }
 
-// Chạy hàm chính
-processDonations();
+main();
