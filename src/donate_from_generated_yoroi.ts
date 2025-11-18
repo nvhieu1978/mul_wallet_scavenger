@@ -113,7 +113,20 @@ async function processDonations() {
                     const donateUrl = `${process.env.BASE_URL}/donate_to/${destination}/${targetAddress}/${signatureHex}`;
                     console.log(`      ...Đang gửi tới API: ${donateUrl.substring(0, 80)}...`);
 
-
+                    try {
+                        const {data} = await axios.post(
+                                donateUrl,
+                                {}, 
+                                { headers: { 'Content-Type': 'application/json' } }
+                            );
+                        console.log("      ✅ API Response:", data);
+                    } catch(error) {
+                       if (axios.isAxiosError(error)) {
+                           console.error("      ❌ Lỗi Axios:", error.response?.data || error.message);
+                       } else {
+                           console.error("      ❌ Lỗi:", error.message);
+                       }
+                    }
                     
                     console.log(`      ...Tạm dừng 1 giây...`);
                     await delay(1000); 
